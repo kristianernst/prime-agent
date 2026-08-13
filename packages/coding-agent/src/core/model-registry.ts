@@ -29,6 +29,7 @@ import type { Validator } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { getAgentDir, VERSION } from "../config.js";
 import type { AuthSourceToken, AuthStatus, AuthStorage } from "./auth-storage.js";
+import { getOpenRouterModels } from "./openrouter-model-catalog.js";
 import { PRIME_INFERENCE_PROVIDER_ID } from "./prime-inference-auth.js";
 import {
 	fetchAuthorizedPrivatePrimeInferenceModelIds,
@@ -421,6 +422,42 @@ function isOfflineModeEnabled(): boolean {
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
+function isOpenRouterVirtualAlias(id: string): boolean {
+	return id === "auto" || id.startsWith("openrouter/") || id.startsWith("~");
+}
+
+/**
+ * Merge the live OpenRouter catalog with the generated snapshot. The live
+ * catalog is authoritative for membership and capabilities; for ids the
+ * snapshot already knows, the snapshot's curated cost/limit metadata is
+ * deliberately kept, so pricing or limit changes on OpenRouter apply only
+ * once the snapshot is regenerated. Virtual aliases (auto, openrouter/*, ~*)
+ * exist only in the snapshot and are always preserved.
+ */
+function resolveOpenRouterCatalog(staticModels: Model<Api>[], live: Model<Api>[] | undefined): Model<Api>[] {
+	if (!live || live.length === 0) return staticModels;
+	const staticById = new Map(staticModels.map((m) => [m.id, m]));
+	const resolved = live.map((model) => {
+		const snapshot = staticById.get(model.id);
+		if (!snapshot) return model;
+		return {
+			...model,
+			compat: mergeCompat(snapshot.compat, model.compat),
+			featured: snapshot.featured,
+			headers: snapshot.headers,
+			cost: snapshot.cost,
+			maxTokens: snapshot.maxTokens,
+			contextWindow: snapshot.contextWindow,
+			thinkingLevelMap: snapshot.thinkingLevelMap ?? model.thinkingLevelMap,
+		};
+	});
+	const liveIds = new Set(live.map((m) => m.id));
+	for (const snapshot of staticModels) {
+		if (!liveIds.has(snapshot.id) && isOpenRouterVirtualAlias(snapshot.id)) resolved.push(snapshot);
+	}
+	return resolved;
+}
+
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
@@ -437,6 +474,7 @@ export class ModelRegistry {
 	private openAICodexModelsCache: { authFingerprint: string; modelIds: Set<string>; refreshedAt: number } | undefined;
 	private backgroundPrivatePrimeAuthorization: { fingerprint: string; promise: Promise<void> } | undefined;
 	private loadError: string | undefined = undefined;
+	private liveOpenRouterModels: Model<Api>[] | undefined;
 
 	/** Re-register dynamic OAuth providers (e.g. user MCP servers) after refresh() resets the registry. */
 	private onOAuthProvidersReset?: () => void;
@@ -540,7 +578,10 @@ export class ModelRegistry {
 		modelOverrides: Map<string, Map<string, ModelOverride>>,
 	): Model<Api>[] {
 		return getProviders().flatMap((provider) => {
-			const models = getModels(provider as KnownProvider) as Model<Api>[];
+			const models =
+				provider === "openrouter"
+					? resolveOpenRouterCatalog(getModels("openrouter") as Model<Api>[], this.liveOpenRouterModels)
+					: (getModels(provider as KnownProvider) as Model<Api>[]);
 			const providerOverride = overrides.get(provider);
 			const perModelOverrides = modelOverrides.get(provider);
 
@@ -786,6 +827,26 @@ export class ModelRegistry {
 		return this.getAvailable();
 	}
 
+	async refreshOpenRouterModels(requireId?: string): Promise<void> {
+		if (isOfflineModeEnabled()) return;
+		try {
+			const models = await getOpenRouterModels(globalThis.fetch, requireId);
+			if (!models) return;
+			this.liveOpenRouterModels = models;
+			this.loadModels();
+		} catch {
+			// Keep the previous live catalog, or the snapshot if none was loaded.
+		}
+	}
+
+	/** Resolve an OpenRouter id from the live catalog when it is missing from the snapshot. */
+	async findOrFetch(provider: string, modelId: string): Promise<Model<Api> | undefined> {
+		const existing = this.find(provider, modelId);
+		if (existing || provider !== "openrouter") return existing;
+		await this.refreshOpenRouterModels(modelId);
+		return this.find(provider, modelId);
+	}
+
 	private async refreshPrivatePrimeInferenceAuthorization(
 		previousPrivateModelIds = new Set(this.authorizedPrivatePrimeInferenceModelIds),
 		previousTeamId = this.authorizedPrivatePrimeInferenceTeamId,
@@ -940,6 +1001,7 @@ export class ModelRegistry {
 	}
 
 	async refreshModelCatalog(): Promise<ModelCatalogSnapshot> {
+		await this.refreshOpenRouterModels();
 		const availableModels = await this.refreshAvailableModels();
 		const availablePrivateModels = new Set(
 			availableModels.filter(isPrivatePrimeInferenceModel).map((model) => `${model.provider}/${model.id}`),

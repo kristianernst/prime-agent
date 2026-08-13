@@ -763,6 +763,10 @@ async function prepareRuntimeServices(options: {
 		})),
 	];
 
+	if (config.provider === "openrouter" || config.model?.toLowerCase().startsWith("openrouter/")) {
+		await modelRegistry.refreshOpenRouterModels();
+	}
+
 	const modelPatterns = config.models ?? settingsManager.getEnabledModels();
 	const scopedModels =
 		modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRegistry) : [];
@@ -813,7 +817,10 @@ async function resolvePreparedStartupModel(options: {
 	let modelFallbackMessage: string | undefined;
 
 	if (!model && hasExistingSession && existingSession.model) {
-		const restoredModel = modelRegistry.find(existingSession.model.provider, existingSession.model.modelId);
+		const restoredModel = await modelRegistry.findOrFetch(
+			existingSession.model.provider,
+			existingSession.model.modelId,
+		);
 		if (restoredModel && modelRegistry.hasConfiguredAuth(restoredModel)) {
 			model = restoredModel;
 		}

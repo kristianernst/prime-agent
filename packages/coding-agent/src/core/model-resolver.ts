@@ -579,6 +579,9 @@ export async function findInitialModel(options: {
 			fallbackMessage: undefined,
 		};
 	}
+	if (defaultProvider === "openrouter" && defaultModelId) {
+		await modelRegistry.findOrFetch(defaultProvider, defaultModelId);
+	}
 	const availableModels = await getAvailableModels();
 
 	// 3. Try saved default from settings
@@ -626,6 +629,7 @@ export async function restoreModelFromSession(
 	shouldPrintMessages: boolean,
 	modelRegistry: ModelRegistry,
 ): Promise<{ model: Model<Api> | undefined; fallbackMessage: string | undefined }> {
+	await modelRegistry.findOrFetch(savedProvider, savedModelId);
 	const availableModels = await modelRegistry.refreshAvailableModels();
 	const restoredModel = availableModels.find(
 		(candidate) => candidate.provider === savedProvider && candidate.id === savedModelId,

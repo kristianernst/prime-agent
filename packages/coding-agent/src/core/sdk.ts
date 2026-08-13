@@ -104,11 +104,11 @@ export type { Skill } from "./skills.js";
 export type { Tool } from "./tools/index.js";
 
 export {
-	withFileMutationQueue,
-	// Tool factories (for custom cwd)
-	createIpythonTool,
 	createBashTool,
 	createEditTool,
+	// Tool factories (for custom cwd)
+	createIpythonTool,
+	withFileMutationQueue,
 };
 
 // Helper Functions
@@ -194,7 +194,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	// If session has data, try to restore model from it
 	if (!model && hasExistingSession && existingSession.model) {
-		const restoredModel = modelRegistry.find(existingSession.model.provider, existingSession.model.modelId);
+		const restoredModel = await modelRegistry.findOrFetch(
+			existingSession.model.provider,
+			existingSession.model.modelId,
+		);
 		if (restoredModel && modelRegistry.hasConfiguredAuth(restoredModel)) {
 			model = restoredModel;
 		}

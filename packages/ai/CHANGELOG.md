@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Added a shared OpenRouter catalog parser used by live discovery and model generation.
+
+## [0.7.2] - 2026-08-11
+
 ## [0.7.1] - 2026-08-07
 
 ## [0.7.0] - 2026-08-05
